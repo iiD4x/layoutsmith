@@ -67,10 +67,7 @@ impl Resources {
             };
             // Values are only read, so a stray invalid byte should not hide
             // the whole file; UTF-16 files come from some Windows tools.
-            let text = crate::xml::decode(&bytes)
-                .map(|(text, _)| text)
-                .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
-            res.add_values_xml(&text);
+            res.add_values_xml(&crate::xml::decode_lossy(&bytes));
         }
         res
     }

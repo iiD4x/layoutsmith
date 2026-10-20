@@ -117,10 +117,11 @@ impl Default for Document {
 impl Document {
     pub fn parse(src: &str) -> Result<Self, ParseError> {
         let mut doc = Parser { src, pos: 0 }.parse()?;
-        // Files saved on Windows often use CRLF; keep edits consistent with it.
-        if let Some(i) = src.find('\n')
-            && src[..i].ends_with('\r')
-        {
+        // Files saved on Windows often use CRLF; keep edits consistent with
+        // whichever line ending the file mostly uses. (CR-only files, from
+        // classic Mac OS, are not supported.)
+        let crlf = src.matches("\r\n").count();
+        if crlf > src.matches('\n').count() - crlf {
             doc.newline = "\r\n";
         }
         Ok(doc)
@@ -716,6 +717,29 @@ fn reindent_ws(ws: &str, old: &str, new: &str) -> String {
     out
 }
 
+/// Like [`decode`], but never fails: invalid sequences become U+FFFD and a
+/// trailing odd byte of UTF-16 text is ignored. For files that are only read.
+pub fn decode_lossy(bytes: &[u8]) -> String {
+    let utf16 = |be: bool| {
+        let (pairs, _) = bytes[2..].as_chunks::<2>();
+        let units = pairs.iter().map(|&pair| {
+            if be {
+                u16::from_be_bytes(pair)
+            } else {
+                u16::from_le_bytes(pair)
+            }
+        });
+        char::decode_utf16(units)
+            .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect()
+    };
+    match bytes {
+        [0xFF, 0xFE, ..] => utf16(false),
+        [0xFE, 0xFF, ..] => utf16(true),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
 /// Decodes the bytes of an XML file: UTF-8 (with or without a byte order
 /// mark), or UTF-16 when the file starts with a UTF-16 byte order mark.
 /// Returns the text and whether it was UTF-16.
@@ -795,17 +819,14 @@ pub fn unescape(raw: &str) -> String {
 
 pub fn escape_attr(value: &str, quote: char) -> String {
     let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(c) = chars.next() {
+    for c in value.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '"' if quote == '"' => out.push_str("&quot;"),
             '\'' if quote == '\'' => out.push_str("&apos;"),
             // Literal line breaks and tabs would turn into spaces when read
-            // back, so write them as character references. A Windows "\r\n"
-            // is one line break.
-            '\r' if chars.peek() == Some(&'\n') => {}
+            // back, so write them as character references.
             '\n' => out.push_str("&#10;"),
             '\r' => out.push_str("&#13;"),
             '\t' => out.push_str("&#9;"),
@@ -1176,7 +1197,8 @@ mod tests {
         let title = doc.find_by_android_id("title").unwrap();
         let ok = doc.find_by_android_id("ok").unwrap();
         doc.set_attr(title, "android:layout_marginTop", "8dp");
-        doc.set_attr(title, "android:text", "two\r\nlines");
+        // The editor hands over "\n" line breaks (egui turns CRLF into LF).
+        doc.set_attr(title, "android:text", "two\nlines");
         let v = doc.create_element("View", &[("android:layout_width", "1dp")]);
         doc.insert_element(v, root, 1, "");
         let frame = doc.create_element("FrameLayout", &[]);
@@ -1191,6 +1213,23 @@ mod tests {
         assert!(all_crlf(&out), "{out:?}");
         assert!(out.contains("android:text=\"two&#10;lines\""), "{out:?}");
         assert_eq!(Document::parse(&out).unwrap().to_xml(), out);
+    }
+
+    #[test]
+    fn newline_follows_the_majority_and_char_refs_survive_edits() {
+        let mostly_crlf = "<A>\n<B/>\r\n<C/>\r\n</A>";
+        assert_eq!(Document::parse(mostly_crlf).unwrap().newline(), "\r\n");
+        let mostly_lf = "<A>\r\n<B/>\n<C/>\n</A>";
+        assert_eq!(Document::parse(mostly_lf).unwrap().newline(), "\n");
+        assert_eq!(Document::parse("<A/>").unwrap().newline(), "\n");
+
+        // value() -> set_attr is lossless for character references.
+        let mut doc = Document::parse("<V a=\"x&#13;&#10;y&#9;z\" />").unwrap();
+        let root = doc.root().unwrap();
+        let v = doc.attr(root, "a").unwrap();
+        assert_eq!(v, "x\r\ny\tz");
+        doc.set_attr(root, "a", &v);
+        assert_eq!(doc.to_xml(), "<V a=\"x&#13;&#10;y&#9;z\" />");
     }
 
     #[test]
@@ -1215,6 +1254,11 @@ mod tests {
         be.extend("<é/>".encode_utf16().flat_map(u16::to_be_bytes));
         assert_eq!(decode(&be).unwrap(), ("<é/>".to_string(), true));
         assert!(decode(&[0xFF, 0xFE, 0x3C]).is_err());
+        // One unpaired surrogate and a stray trailing byte.
+        let mut bad = le.clone();
+        bad.extend([0x00, 0xD8, 0x0A]);
+        assert_eq!(decode_lossy(&bad), "<é/>\u{fffd}");
+        assert_eq!(decode_lossy(&[0xC3, 0x28]), "\u{fffd}(");
         assert!(decode(&[0xC3, 0x28]).is_err());
     }
 
