@@ -35,7 +35,24 @@ A desktop tool, written in Rust, for opening Android layout XML files and changi
 
 ## Getting started
 
+### Windows: download
+
+1. Open the [latest release](https://github.com/iiD4x/layoutsmith/releases/latest).
+2. Download `layoutsmith-<version>-windows-x86_64.exe`. The `.zip` holds the same program plus the sample project.
+3. Double-click it. There is nothing to install, and you don't need Rust or the Visual C++ runtime.
+
+The exe isn't code-signed yet. The first time, Windows SmartScreen may say "Windows protected your PC": click **More info**, then **Run anyway**.
+
+To open a layout directly, drag the `.xml` file onto the window, or use **Open with** and choose `layoutsmith.exe`.
+
+### Build from source
+
 You need a recent stable Rust toolchain (1.95 or newer).
+
+- **Windows**: install Rust with [rustup-init.exe](https://rustup.rs). It offers to install the Visual Studio C++ Build Tools Rust needs; accept.
+- **macOS / Linux**: install Rust with [rustup](https://rustup.rs).
+
+Then:
 
 ```sh
 git clone https://github.com/iiD4x/layoutsmith
@@ -43,9 +60,24 @@ cd layoutsmith
 cargo run --release -- path/to/app/src/main/res/layout/activity_main.xml
 ```
 
+On Windows the path looks like `C:\Users\you\AndroidStudioProjects\MyApp\app\src\main\res\layout\activity_main.xml`. `cargo build --release` puts the program in `target\release\layoutsmith.exe`.
+
 Run it without a file to get a welcome screen with **Open**, **New layout** and **Try the sample**. The `samples/` folder contains a small Android `res` tree to play with.
 
 Open layouts from inside your Android project (`…/res/layout/…`) so layoutsmith can find `res/values/` next to them.
+
+Files with Windows line endings (CRLF) stay CRLF when you edit them.
+
+### Windows graphics troubleshooting
+
+On Windows, layoutsmith draws with Direct3D 12. On virtual machines and Remote Desktop without a GPU, it falls back to Windows' built-in software renderer, and then to OpenGL. If the window still doesn't appear, an error box says why. Updating the graphics driver usually fixes it. You can also choose the renderer yourself before starting the app:
+
+```bat
+set LAYOUTSMITH_RENDERER=glow
+layoutsmith.exe
+```
+
+(`glow` is OpenGL, `wgpu` is Direct3D.)
 
 ### Linux
 

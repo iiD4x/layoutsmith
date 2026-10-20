@@ -62,9 +62,15 @@ impl Resources {
             .collect();
         files.sort();
         for file in files {
-            if let Ok(text) = std::fs::read_to_string(&file) {
-                res.add_values_xml(&text);
-            }
+            let Ok(bytes) = std::fs::read(&file) else {
+                continue;
+            };
+            // Values are only read, so a stray invalid byte should not hide
+            // the whole file; UTF-16 files come from some Windows tools.
+            let text = crate::xml::decode(&bytes)
+                .map(|(text, _)| text)
+                .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
+            res.add_values_xml(&text);
         }
         res
     }
@@ -351,6 +357,17 @@ mod tests {
             r.resolve_color("@color/accent"),
             Color::parse_hex("#123456")
         );
+
+        // A UTF-16 values file, as written by some Windows tools.
+        let mut utf16 = vec![0xFF, 0xFE];
+        utf16.extend(
+            "<resources>\r\n<dimen name=\"gap\">6dp</dimen>\r\n</resources>"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        std::fs::write(dir.join("res/values/dimens.xml"), utf16).unwrap();
+        let r = Resources::for_layout(&dir.join("res/layout/main.xml"));
+        assert_eq!(r.resolve_dimension("@dimen/gap", 2.0), Some(6.0));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

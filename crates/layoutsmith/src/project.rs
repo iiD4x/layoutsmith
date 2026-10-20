@@ -50,8 +50,17 @@ impl Project {
         measurer: Rc<dyn TextMeasurer>,
         screen: [f32; 2],
     ) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+        let bytes =
+            std::fs::read(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+        let (text, utf16) = layoutsmith_core::xml::decode(&bytes)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        // Saving writes UTF-8; refuse rather than silently change the encoding.
+        if utf16 {
+            return Err(format!(
+                "{} is saved as UTF-16. Save it as UTF-8 (as Android Studio does) to edit it.",
+                path.display()
+            ));
+        }
         let doc = Document::parse(&text).map_err(|e| format!("{}:{e}", path.display()))?;
         let res = Resources::for_layout(path);
         Ok(Self::new(

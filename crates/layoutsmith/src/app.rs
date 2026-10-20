@@ -84,6 +84,8 @@ pub struct App {
     title: String,
     /// Opened on the first frame: text can't be measured before fonts load.
     startup_path: Option<PathBuf>,
+    /// Whether the first-frame window sizing has been done.
+    window_fitted: bool,
 }
 
 impl App {
@@ -109,6 +111,7 @@ impl App {
             allow_close: false,
             title: String::new(),
             startup_path: path,
+            window_fitted: false,
         }
     }
 
@@ -195,8 +198,12 @@ impl App {
         }
     }
 
-    fn open_dialog(&mut self, ctx: &egui::Context) {
-        let mut dialog = rfd::FileDialog::new().add_filter("Android layout", &["xml"]);
+    /// File dialogs are owned by the main window, so it is disabled while
+    /// they are open (on Windows an ownerless dialog leaves it clickable).
+    fn open_dialog(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_parent(frame)
+            .add_filter("Android layout", &["xml"]);
         if let Some(dir) = self
             .project
             .as_ref()
@@ -211,7 +218,7 @@ impl App {
     }
 
     /// Returns whether the file was saved.
-    fn save(&mut self, ctx: &egui::Context, choose_path: bool) -> bool {
+    fn save(&mut self, ctx: &egui::Context, frame: &eframe::Frame, choose_path: bool) -> bool {
         let Some(project) = &mut self.project else {
             return false;
         };
@@ -219,6 +226,7 @@ impl App {
             (Some(p), false) => p.clone(),
             _ => {
                 let mut dialog = rfd::FileDialog::new()
+                    .set_parent(frame)
                     .add_filter("Android layout", &["xml"])
                     .set_file_name(project.file_name());
                 if let Some(dir) = project.path.as_ref().and_then(|p| p.parent()) {
@@ -238,6 +246,21 @@ impl App {
             Err(e) => {
                 self.say(ctx, e, true);
                 false
+            }
+        }
+    }
+
+    /// The default window is too tall for laptop screens at 125-150 %
+    /// scaling (common on Windows), which would hide the status bar under the
+    /// taskbar; maximize there instead. Waits until the monitor size is known.
+    fn fit_window(&mut self, ctx: &egui::Context) {
+        if self.window_fitted {
+            return;
+        }
+        if let Some(monitor) = ctx.input(|i| i.viewport().monitor_size) {
+            self.window_fitted = true;
+            if monitor.x < 1500.0 || monitor.y < 1000.0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
             }
         }
     }
@@ -290,21 +313,21 @@ impl App {
         self.fix_selection();
     }
 
-    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+    fn handle_shortcuts(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         let cmd = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
         let cmd_shift = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
         let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
 
         if pressed(cmd(Key::O)) {
-            self.open_dialog(ctx);
+            self.open_dialog(ctx, frame);
         }
         if pressed(cmd(Key::N)) {
             self.request(Pending::New, ctx);
         }
         if pressed(cmd_shift(Key::S)) {
-            self.save(ctx, true);
+            self.save(ctx, frame, true);
         } else if pressed(cmd(Key::S)) {
-            self.save(ctx, false);
+            self.save(ctx, frame, false);
         }
         if ctx.egui_wants_keyboard_input() {
             return; // Let text fields have their keys (and their own undo).
@@ -386,7 +409,7 @@ impl App {
         }
     }
 
-    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+    fn menu_bar(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
         let ctx = ui.ctx().clone();
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -395,7 +418,7 @@ impl App {
                 }
                 if ui.button("Open…            Ctrl+O").clicked() {
                     ui.close();
-                    self.open_dialog(&ctx);
+                    self.open_dialog(&ctx, frame);
                 }
                 if ui.button("Open sample").clicked() {
                     self.request(Pending::Sample, &ctx);
@@ -407,14 +430,14 @@ impl App {
                     .clicked()
                 {
                     ui.close();
-                    self.save(&ctx, false);
+                    self.save(&ctx, frame, false);
                 }
                 if ui
                     .add_enabled(has_project, egui::Button::new("Save as…  Ctrl+Shift+S"))
                     .clicked()
                 {
                     ui.close();
-                    self.save(&ctx, true);
+                    self.save(&ctx, frame, true);
                 }
                 let has_path = self.project.as_ref().is_some_and(|p| p.path.is_some());
                 if ui
@@ -592,8 +615,12 @@ impl App {
         let Some(project) = &mut self.project else {
             return;
         };
+        // The editor works with "\n" (egui inserts it for Enter and strips
+        // "\r" from pastes), so CRLF files are edited as LF and converted back.
+        let crlf = project.doc.newline() == "\r\n";
         if !self.xml_edited && self.xml_revision != Some(project.revision) {
-            self.xml_buffer = project.doc.to_xml();
+            let xml = project.doc.to_xml();
+            self.xml_buffer = if crlf { xml.replace("\r\n", "\n") } else { xml };
             self.xml_revision = Some(project.revision);
         }
         ui.horizontal(|ui| {
@@ -602,7 +629,12 @@ impl App {
                 .add_enabled(self.xml_edited, egui::Button::new("Apply"))
                 .clicked()
             {
-                match project.replace_source(&self.xml_buffer) {
+                let source = if crlf {
+                    self.xml_buffer.replace("\r\n", "\n").replace('\n', "\r\n")
+                } else {
+                    self.xml_buffer.clone()
+                };
+                match project.replace_source(&source) {
                     Ok(()) => {
                         self.xml_edited = false;
                         self.xml_error = None;
@@ -644,7 +676,7 @@ impl App {
             });
     }
 
-    fn welcome(&mut self, ui: &mut egui::Ui) {
+    fn welcome(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
         let ctx = ui.ctx().clone();
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.25);
@@ -655,7 +687,7 @@ impl App {
                 .button(RichText::new("Open layout…").size(16.0))
                 .clicked()
             {
-                self.open_dialog(&ctx);
+                self.open_dialog(&ctx, frame);
             }
             ui.add_space(6.0);
             if ui.button("New layout").clicked() {
@@ -670,7 +702,7 @@ impl App {
         });
     }
 
-    fn pending_dialog(&mut self, ctx: &egui::Context) {
+    fn pending_dialog(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         if self.pending.is_none() {
             return;
         }
@@ -699,7 +731,7 @@ impl App {
         });
         match choice {
             Some(0) => {
-                if self.save(ctx, false)
+                if self.save(ctx, frame, false)
                     && let Some(action) = self.pending.take()
                 {
                     self.perform(action, ctx);
@@ -717,20 +749,22 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let frame: &eframe::Frame = frame;
         let ctx = ui.ctx().clone();
+        self.fit_window(&ctx);
         if let Some(path) = self.startup_path.take() {
             self.open(&path, &ctx);
         }
         self.handle_window_events(&ctx);
-        self.handle_shortcuts(&ctx);
+        self.handle_shortcuts(&ctx, frame);
         self.fix_selection();
         let screen = self.screen();
         if let Some(p) = &mut self.project {
             p.set_screen(screen);
         }
 
-        egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui, frame));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
 
         if self.project.is_some() {
@@ -781,9 +815,9 @@ impl eframe::App for App {
                     &mut self.hovered,
                 );
             }
-            None => self.welcome(ui),
+            None => self.welcome(ui, frame),
         });
 
-        self.pending_dialog(&ctx);
+        self.pending_dialog(&ctx, frame);
     }
 }

@@ -48,8 +48,20 @@ pub struct Attr {
 }
 
 impl Attr {
+    /// The value as an XML parser reports it: line breaks and tabs written
+    /// literally inside the quotes become spaces (attribute-value
+    /// normalization), character references such as `&#10;` are decoded.
     pub fn value(&self) -> String {
-        unescape(&self.raw_value)
+        if self.raw_value.contains(['\r', '\n', '\t']) {
+            unescape(
+                &self
+                    .raw_value
+                    .replace("\r\n", " ")
+                    .replace(['\r', '\n', '\t'], " "),
+            )
+        } else {
+            unescape(&self.raw_value)
+        }
     }
 }
 
@@ -85,6 +97,8 @@ pub struct Node {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
     nodes: Vec<Node>,
+    /// The line break new whitespace is written with: the one the file uses.
+    newline: &'static str,
 }
 
 impl Default for Document {
@@ -95,13 +109,26 @@ impl Default for Document {
                 parent: None,
                 children: Vec::new(),
             }],
+            newline: "\n",
         }
     }
 }
 
 impl Document {
     pub fn parse(src: &str) -> Result<Self, ParseError> {
-        Parser { src, pos: 0 }.parse()
+        let mut doc = Parser { src, pos: 0 }.parse()?;
+        // Files saved on Windows often use CRLF; keep edits consistent with it.
+        if let Some(i) = src.find('\n')
+            && src[..i].ends_with('\r')
+        {
+            doc.newline = "\r\n";
+        }
+        Ok(doc)
+    }
+
+    /// `"\r\n"` for files with Windows line endings, `"\n"` otherwise.
+    pub fn newline(&self) -> &'static str {
+        self.newline
     }
 
     pub fn to_xml(&self) -> String {
@@ -370,7 +397,12 @@ impl Document {
             return a.leading.clone();
         }
         if self.uses_attr_per_line() {
-            format!("\n{}{}", self.indent_of(id), self.indent_unit())
+            format!(
+                "{}{}{}",
+                self.newline,
+                self.indent_of(id),
+                self.indent_unit()
+            )
         } else {
             " ".into()
         }
@@ -443,13 +475,14 @@ impl Document {
     pub fn create_element(&mut self, name: &str, attrs: &[(&str, &str)]) -> NodeId {
         let per_line = self.uses_attr_per_line();
         let unit = self.indent_unit();
+        let nl = self.newline;
         let element = Element {
             name: name.to_string(),
             attrs: attrs
                 .iter()
                 .map(|(n, v)| Attr {
                     leading: if per_line {
-                        format!("\n{unit}")
+                        format!("{nl}{unit}")
                     } else {
                         " ".into()
                     },
@@ -579,13 +612,14 @@ impl Document {
             kids.insert(last + 1, id);
             kids.insert(last + 1, sep);
         } else {
-            let ws = self.push_node(NodeKind::Text(format!("\n{new_indent}")), Some(parent));
+            let nl = self.newline;
+            let ws = self.push_node(NodeKind::Text(format!("{nl}{new_indent}")), Some(parent));
             let kids = &mut self.nodes[parent].children;
             kids.insert(0, id);
             kids.insert(0, ws);
             if !had_children {
                 let close =
-                    self.push_node(NodeKind::Text(format!("\n{parent_indent}")), Some(parent));
+                    self.push_node(NodeKind::Text(format!("{nl}{parent_indent}")), Some(parent));
                 self.nodes[parent].children.push(close);
             }
         }
@@ -605,7 +639,8 @@ impl Document {
             })
             .next_back()
             .unwrap_or(false);
-        format!("{}{indent}", if blank_lines { "\n\n" } else { "\n" })
+        let breaks = if blank_lines { 2 } else { 1 };
+        format!("{}{indent}", self.newline.repeat(breaks))
     }
 
     fn reindent(&mut self, id: NodeId, old: &str, new: &str) {
@@ -681,6 +716,36 @@ fn reindent_ws(ws: &str, old: &str, new: &str) -> String {
     out
 }
 
+/// Decodes the bytes of an XML file: UTF-8 (with or without a byte order
+/// mark), or UTF-16 when the file starts with a UTF-16 byte order mark.
+/// Returns the text and whether it was UTF-16.
+pub fn decode(bytes: &[u8]) -> Result<(String, bool), String> {
+    let utf16 = |be: bool| -> Result<(String, bool), String> {
+        let body = &bytes[2..];
+        if !body.len().is_multiple_of(2) {
+            return Err("truncated UTF-16 text".into());
+        }
+        let units = body.chunks_exact(2).map(|c| {
+            if be {
+                u16::from_be_bytes([c[0], c[1]])
+            } else {
+                u16::from_le_bytes([c[0], c[1]])
+            }
+        });
+        char::decode_utf16(units)
+            .collect::<Result<String, _>>()
+            .map(|s| (s, true))
+            .map_err(|e| e.to_string())
+    };
+    match bytes {
+        [0xFF, 0xFE, ..] => utf16(false),
+        [0xFE, 0xFF, ..] => utf16(true),
+        _ => String::from_utf8(bytes.to_vec())
+            .map(|s| (s, false))
+            .map_err(|_| "not valid UTF-8".into()),
+    }
+}
+
 /// The name part of an id reference: `@+id/title` and `@id/title` give `title`.
 pub fn id_name(value: &str) -> Option<&str> {
     value
@@ -730,13 +795,20 @@ pub fn unescape(raw: &str) -> String {
 
 pub fn escape_attr(value: &str, quote: char) -> String {
     let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '"' if quote == '"' => out.push_str("&quot;"),
             '\'' if quote == '\'' => out.push_str("&apos;"),
+            // Literal line breaks and tabs would turn into spaces when read
+            // back, so write them as character references. A Windows "\r\n"
+            // is one line break.
+            '\r' if chars.peek() == Some(&'\n') => {}
             '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\t' => out.push_str("&#9;"),
             _ => out.push(c),
         }
     }
@@ -922,7 +994,12 @@ impl Parser<'_> {
     fn error(&self, pos: usize, message: &str) -> ParseError {
         let before = &self.src[..pos.min(self.src.len())];
         let line = before.matches('\n').count() + 1;
-        let column = before.len() - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+        let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+        let column = before[line_start..]
+            .trim_start_matches('\u{feff}')
+            .chars()
+            .count()
+            + 1;
         ParseError {
             line,
             column,
@@ -1081,6 +1158,72 @@ mod tests {
             doc.to_xml(),
             "<V\n    android:layout_width=\"1dp\"\n    android:layout_marginTop=\"2dp\"\n    app:layout_constraintTop_toTopOf=\"parent\"\n    app:layout_constraintStart_toStartOf=\"parent\"\n    android:text=\"x\" />"
         );
+    }
+
+    /// Every line break in `s` is CRLF.
+    fn all_crlf(s: &str) -> bool {
+        !s.replace("\r\n", "").contains(['\n', '\r'])
+    }
+
+    #[test]
+    fn crlf_files_stay_crlf_after_edits() {
+        let src = SAMPLE.replace('\n', "\r\n");
+        let mut doc = Document::parse(&src).unwrap();
+        assert_eq!(doc.newline(), "\r\n");
+        assert_eq!(doc.to_xml(), src);
+
+        let root = doc.root().unwrap();
+        let title = doc.find_by_android_id("title").unwrap();
+        let ok = doc.find_by_android_id("ok").unwrap();
+        doc.set_attr(title, "android:layout_marginTop", "8dp");
+        doc.set_attr(title, "android:text", "two\r\nlines");
+        let v = doc.create_element("View", &[("android:layout_width", "1dp")]);
+        doc.insert_element(v, root, 1, "");
+        let frame = doc.create_element("FrameLayout", &[]);
+        doc.insert_element(frame, root, usize::MAX, "");
+        doc.move_element(ok, frame, 0);
+        doc.set_attr(frame, "android:id", "@+id/frame");
+        let copy = doc.clone_subtree(title);
+        doc.insert_element(copy, root, 0, "    ");
+        doc.move_element(title, root, 3);
+
+        let out = doc.to_xml();
+        assert!(all_crlf(&out), "{out:?}");
+        assert!(out.contains("android:text=\"two&#10;lines\""), "{out:?}");
+        assert_eq!(Document::parse(&out).unwrap().to_xml(), out);
+    }
+
+    #[test]
+    fn literal_line_breaks_in_attributes_read_as_spaces() {
+        let doc = Document::parse("<V a=\"one\r\n  two\tthree&#10;four\" />").unwrap();
+        let root = doc.root().unwrap();
+        assert_eq!(doc.attr(root, "a").unwrap(), "one   two three\nfour");
+    }
+
+    #[test]
+    fn decodes_utf8_and_utf16() {
+        assert_eq!(
+            decode("<a/>".as_bytes()).unwrap(),
+            ("<a/>".to_string(), false)
+        );
+        let bom8 = b"\xEF\xBB\xBF<a/>";
+        assert_eq!(decode(bom8).unwrap().0, "\u{feff}<a/>");
+        let mut le = vec![0xFF, 0xFE];
+        le.extend("<é/>".encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(decode(&le).unwrap(), ("<é/>".to_string(), true));
+        let mut be = vec![0xFE, 0xFF];
+        be.extend("<é/>".encode_utf16().flat_map(u16::to_be_bytes));
+        assert_eq!(decode(&be).unwrap(), ("<é/>".to_string(), true));
+        assert!(decode(&[0xFF, 0xFE, 0x3C]).is_err());
+        assert!(decode(&[0xC3, 0x28]).is_err());
+    }
+
+    #[test]
+    fn utf8_bom_round_trips_and_errors_count_characters() {
+        let src = "\u{feff}<?xml version=\"1.0\"?>\n<A/>";
+        assert_eq!(Document::parse(src).unwrap().to_xml(), src);
+        let err = Document::parse("<é x=1/>").unwrap_err();
+        assert_eq!((err.line, err.column), (1, 6));
     }
 
     #[test]

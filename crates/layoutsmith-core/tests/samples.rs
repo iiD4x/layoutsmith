@@ -30,6 +30,28 @@ fn lay(doc: &Document, res: &Resources) -> LayoutResult {
 }
 
 #[test]
+fn crlf_copies_of_the_samples_edit_cleanly() {
+    let (text, _, res) = load("activity_profile.xml");
+    let crlf = text.replace("\r\n", "\n").replace('\n', "\r\n");
+    let mut doc = Document::parse(&crlf).unwrap();
+    assert_eq!(doc.to_xml(), crlf);
+    let root = doc.root().unwrap();
+    let l = lay(&doc, &res);
+    let notify = doc.find_by_android_id("notify").unwrap();
+    edit::move_by(&mut doc, &res, &l, notify, [8.0, 8.0]);
+    edit::insert_view(&mut doc, root, usize::MAX, edit::NewView::Button);
+    let stats = doc.find_by_android_id("stats").unwrap();
+    edit::duplicate(&mut doc, stats);
+    let role = doc.find_by_android_id("role").unwrap();
+    edit::delete(&mut doc, role);
+    let out = doc.to_xml();
+    assert!(
+        !out.replace("\r\n", "").contains('\n'),
+        "bare LF in {out:?}"
+    );
+}
+
+#[test]
 fn samples_round_trip_unchanged() {
     for name in ["activity_profile.xml", "item_contact.xml"] {
         let (text, doc, _) = load(name);
@@ -86,14 +108,16 @@ fn edits_touch_only_what_they_change() {
     let l = lay(&doc, &res);
     let notify = doc.find_by_android_id("notify").unwrap();
     edit::move_by(&mut doc, &res, &l, notify, [8.0, 0.0]);
-    let after = doc.to_xml();
-    assert_eq!(
-        after,
-        text.replace(
-            "        android:layout_marginStart=\"@dimen/screen_padding\"\n        android:text=\"@string/notify\"",
-            "        android:layout_marginStart=\"24dp\"\n        android:text=\"@string/notify\""
-        )
+    // Works whatever line endings the checkout gave the sample.
+    let nl = doc.newline();
+    let before = format!(
+        "        android:layout_marginStart=\"@dimen/screen_padding\"{nl}        android:text=\"@string/notify\""
     );
+    let changed = format!(
+        "        android:layout_marginStart=\"24dp\"{nl}        android:text=\"@string/notify\""
+    );
+    assert!(text.contains(&before));
+    assert_eq!(doc.to_xml(), text.replace(&before, &changed));
 
     // Center the name horizontally (it already is) and then pin it to the end.
     let name = doc.find_by_android_id("name").unwrap();

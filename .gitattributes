@@ -1,0 +1,4 @@
+# Keep LF in the repository and in checkouts on every OS, so the samples and
+# templates embedded with include_str! are the same in every build.
+* text=auto eol=lf
+*.png binary

@@ -1,0 +1,41 @@
+name: Release
+
+# Push a version tag to publish a release with the Windows build attached:
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --locked -p layoutsmith
+      - name: Package
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $name = "layoutsmith-$env:TAG-windows-x86_64"
+          New-Item -ItemType Directory -Path "dist/$name" -Force | Out-Null
+          Copy-Item -Path target/release/layoutsmith.exe, README.md, LICENSE -Destination "dist/$name/"
+          Copy-Item -Path samples -Destination "dist/$name/samples" -Recurse
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          Copy-Item -Path target/release/layoutsmith.exe -Destination "dist/$name.exe"
+          Get-FileHash "dist/$name.zip", "dist/$name.exe" -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
+            Set-Content -Encoding ascii dist/SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/*.zip
+            dist/*.exe
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
