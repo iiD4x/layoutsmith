@@ -721,15 +721,15 @@ fn reindent_ws(ws: &str, old: &str, new: &str) -> String {
 /// Returns the text and whether it was UTF-16.
 pub fn decode(bytes: &[u8]) -> Result<(String, bool), String> {
     let utf16 = |be: bool| -> Result<(String, bool), String> {
-        let body = &bytes[2..];
-        if !body.len().is_multiple_of(2) {
+        let (pairs, odd) = bytes[2..].as_chunks::<2>();
+        if !odd.is_empty() {
             return Err("truncated UTF-16 text".into());
         }
-        let units = body.chunks_exact(2).map(|c| {
+        let units = pairs.iter().map(|&pair| {
             if be {
-                u16::from_be_bytes([c[0], c[1]])
+                u16::from_be_bytes(pair)
             } else {
-                u16::from_le_bytes([c[0], c[1]])
+                u16::from_le_bytes(pair)
             }
         });
         char::decode_utf16(units)
