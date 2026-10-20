@@ -17,7 +17,9 @@ fn run(renderer: eframe::Renderer, path: Option<PathBuf>) -> eframe::Result {
     #[allow(unused_mut)]
     let mut options = eframe::NativeOptions {
         renderer,
-        centered: true,
+        // The window is not centered: eframe centers on the primary monitor
+        // without the taskbar, which can push the title bar off-screen. The
+        // app maximizes itself on screens too small for it (App::fit_window).
         viewport: egui::ViewportBuilder::default()
             .with_title("layoutsmith")
             .with_inner_size([1440.0, 920.0])
@@ -64,25 +66,52 @@ fn main() {
         .map(PathBuf::from)
         .map(|p| std::path::absolute(&p).unwrap_or(p));
 
-    // LAYOUTSMITH_RENDERER=glow|wgpu overrides the platform default.
-    let forced = std::env::var("LAYOUTSMITH_RENDERER")
-        .ok()
-        .and_then(|r| r.parse::<eframe::Renderer>().ok());
-    #[allow(unused_mut)]
-    let mut result = run(forced.unwrap_or_default(), path.clone());
+    // LAYOUTSMITH_RENDERER=glow (or wgpu, on Windows and macOS) overrides the
+    // platform default.
+    let mut notes = Vec::new();
+    let forced = match std::env::var("LAYOUTSMITH_RENDERER") {
+        Ok(name) => match name.trim().parse::<eframe::Renderer>() {
+            Ok(renderer) => Some(renderer),
+            Err(err) => {
+                notes.push(format!("LAYOUTSMITH_RENDERER={name} was ignored: {err}"));
+                None
+            }
+        },
+        Err(_) => None,
+    };
+    for note in &notes {
+        eprintln!("{note}");
+    }
+
+    let first = run(forced.unwrap_or_default(), path.clone());
     // No usable Direct3D/OpenGL adapter for wgpu: try plain OpenGL before
     // giving up. eframe reuses its event loop, so running again is allowed.
     #[cfg(windows)]
-    if forced.is_none() && matches!(result, Err(eframe::Error::Wgpu(_))) {
-        result = run(eframe::Renderer::Glow, path);
-    }
+    let result = match first {
+        Err(err @ eframe::Error::Wgpu(_)) if forced.is_none() => {
+            notes.push(format!("Direct3D (wgpu) failed: {err}"));
+            run(eframe::Renderer::Glow, path)
+        }
+        other => other,
+    };
+    #[cfg(not(windows))]
+    let result = first;
 
     if let Err(err) = result {
-        let text = format!(
-            "layoutsmith could not start:\n\n{err}\n\n\
-             Updating the graphics driver usually helps. You can also try the other \
-             renderer by setting the environment variable LAYOUTSMITH_RENDERER=glow or wgpu."
-        );
+        let mut text = format!("layoutsmith could not start:\n\n{err}");
+        for note in &notes {
+            text.push_str(&format!("\n\n{note}"));
+        }
+        text.push_str("\n\nUpdating the graphics driver usually helps.");
+        // Only Windows has a second working renderer, and it has already been
+        // tried unless one was forced.
+        #[cfg(windows)]
+        if forced.is_some() {
+            text.push_str(
+                " You can also try the other renderer with the environment variable \
+                 LAYOUTSMITH_RENDERER=glow or LAYOUTSMITH_RENDERER=wgpu.",
+            );
+        }
         eprintln!("{text}");
         #[cfg(windows)]
         rfd::MessageDialog::new()

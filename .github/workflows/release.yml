@@ -14,6 +14,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Keep the write token off disk while dependencies' build scripts run.
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace --locked
       - run: cargo build --release --locked -p layoutsmith
@@ -28,9 +31,10 @@ jobs:
           Copy-Item -Path samples -Destination "dist/$name/samples" -Recurse
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
           Copy-Item -Path target/release/layoutsmith.exe -Destination "dist/$name.exe"
-          Get-FileHash "dist/$name.zip", "dist/$name.exe" -Algorithm SHA256 |
-            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
-            Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          # LF line endings, so both sha256sum -c and macOS shasum -c accept it.
+          $sums = Get-FileHash "dist/$name.zip", "dist/$name.exe" -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) }
+          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS.txt", ($sums -join "`n") + "`n")
       - uses: softprops/action-gh-release@v3
         with:
           files: |

@@ -38,12 +38,12 @@ A desktop tool, written in Rust, for opening Android layout XML files and changi
 ### Windows: download
 
 1. Open the [latest release](https://github.com/iiD4x/layoutsmith/releases/latest).
-2. Download `layoutsmith-<version>-windows-x86_64.exe`. The `.zip` holds the same program plus the sample project.
+2. Download `layoutsmith-v<version>-windows-x86_64.exe` (for example `layoutsmith-v0.1.0-windows-x86_64.exe`). You can rename it to `layoutsmith.exe`. The `.zip` holds the same program, already named `layoutsmith.exe`, plus the sample project.
 3. Double-click it. There is nothing to install, and you don't need Rust or the Visual C++ runtime.
 
 The exe isn't code-signed yet. The first time, Windows SmartScreen may say "Windows protected your PC": click **More info**, then **Run anyway**.
 
-To open a layout directly, drag the `.xml` file onto the window, or use **Open with** and choose `layoutsmith.exe`.
+To open a layout directly, drag the `.xml` file onto the window, or use **Open with** and choose the layoutsmith `.exe`.
 
 ### Build from source
 
@@ -70,14 +70,14 @@ Files with Windows line endings (CRLF) stay CRLF when you edit them.
 
 ### Windows graphics troubleshooting
 
-On Windows, layoutsmith draws with Direct3D 12. On virtual machines and Remote Desktop without a GPU, it falls back to Windows' built-in software renderer, and then to OpenGL. If the window still doesn't appear, an error box says why. Updating the graphics driver usually fixes it. You can also choose the renderer yourself before starting the app:
+On Windows, layoutsmith draws with Direct3D 12. On virtual machines and Remote Desktop without a GPU, it falls back to Windows' built-in software renderer, and then to OpenGL. If the window still doesn't appear, an error box says why. Updating the graphics driver usually fixes it. You can also choose the renderer yourself: in a Command Prompt opened in the folder with the exe, run
 
 ```bat
 set LAYOUTSMITH_RENDERER=glow
-layoutsmith.exe
+layoutsmith-v0.1.0-windows-x86_64.exe
 ```
 
-(`glow` is OpenGL, `wgpu` is Direct3D.)
+using the name of the file you downloaded. (`glow` is OpenGL, `wgpu` is Direct3D.)
 
 ### Linux
 

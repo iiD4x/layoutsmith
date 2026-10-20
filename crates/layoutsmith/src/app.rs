@@ -259,7 +259,15 @@ impl App {
         }
         if let Some(monitor) = ctx.input(|i| i.viewport().monitor_size) {
             self.window_fitted = true;
-            if monitor.x < 1500.0 || monitor.y < 1000.0 {
+            // Room for the 920 pt window plus a title bar (~31 pt) and the
+            // Windows taskbar (~48 pt), with some slack for the position.
+            if monitor.x < 1520.0 || monitor.y < 1080.0 {
+                // Shrink first, so "Restore Down" gives a window that fits.
+                let size = egui::vec2(
+                    (monitor.x - 80.0).clamp(900.0, 1440.0),
+                    (monitor.y - 160.0).clamp(560.0, 920.0),
+                );
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
             }
         }
