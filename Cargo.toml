@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["crates/layoutsmith-core", "crates/layoutsmith"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/iiD4x/layoutsmith"
+rust-version = "1.95"
+
+[profile.dev.package."*"]
+opt-level = 2

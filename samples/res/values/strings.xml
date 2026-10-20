@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="avatar">Profile photo</string>
+    <string name="name">Ada Lovelace</string>
+    <string name="role">Analytical Engine programmer</string>
+    <string name="follow">Follow</string>
+    <string name="message">Message</string>
+    <string name="call">Call</string>
+    <string name="status_hint">What\'s on your mind?</string>
+    <string name="notify">Notify me about new posts</string>
+</resources>

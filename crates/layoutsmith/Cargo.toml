@@ -1,0 +1,13 @@
+[package]
+name = "layoutsmith"
+description = "Visual editor for Android layout XML files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+layoutsmith-core = { path = "../layoutsmith-core" }
+eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+rfd = "0.17.2"

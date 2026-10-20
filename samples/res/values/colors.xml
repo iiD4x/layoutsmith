@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#FF3949AB</color>
+    <color name="primary_dark">#FF283593</color>
+    <color name="secondary">#FFFFC107</color>
+    <color name="surface">#FFF5F5F7</color>
+    <color name="on_surface">#FF1C1B1F</color>
+    <color name="muted">#FF6E6E73</color>
+    <color name="avatar_ring">#FFFFFFFF</color>
+</resources>
