@@ -1,13 +1,23 @@
 name: Release
 
-# Push a version tag to publish a release with the Windows build attached:
+# Publishes the Windows build with a release. Either push a version tag:
 #   git tag v0.1.0 && git push origin v0.1.0
+# or publish a release on GitHub (Releases > Draft a new release, new tag v0.1.0);
+# the files are then added to that release.
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
 
 permissions:
   contents: write
+
+# A release made on the website can also fire the tag push; run one at a time
+# (re-uploads overwrite the same files).
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   windows:
@@ -42,4 +52,5 @@ jobs:
             dist/*.exe
             dist/SHA256SUMS.txt
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          # Keep notes written on the website; generate them for tag pushes.
+          generate_release_notes: ${{ github.event_name == 'push' }}
